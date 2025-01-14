@@ -19,6 +19,9 @@ interface DraggableDesignProps {
   onDrag: (e: DraggableEvent, data: { x: number; y: number }) => void;
   onResize: (e: React.SyntheticEvent, data: ResizeCallbackData) => void;
   initialPosition: Position;
+  bounds: { left: number; top: number; right: number; bottom: number };
+  maxConstraints: [number, number];
+  viewType: string;
 }
 
 export default function DraggableDesign({
@@ -28,17 +31,15 @@ export default function DraggableDesign({
   onDrag,
   onResize,
   initialPosition,
+  bounds,
+  maxConstraints,
+  viewType,
 }: DraggableDesignProps) {
   return (
     <Draggable
       position={position}
       onDrag={onDrag}
-      bounds={{
-        left: -50,
-        top: -50,
-        right: 250,
-        bottom: 250,
-      }}
+      bounds={bounds}
       defaultPosition={initialPosition}
     >
       <div className="absolute">
@@ -47,7 +48,7 @@ export default function DraggableDesign({
           height={size.height}
           onResize={onResize}
           minConstraints={[50, 50]}
-          maxConstraints={[200, 200]}
+          maxConstraints={maxConstraints}
           lockAspectRatio
           resizeHandles={["se", "sw", "ne", "nw"]}
           className="group"
@@ -59,7 +60,7 @@ export default function DraggableDesign({
               className="w-full h-full object-contain"
               draggable={false}
             />
-            <div className="size-indicator">
+            <div className="size-indicator text-xs text-center">
               {Math.round(size.width)} × {Math.round(size.height)}
             </div>
             <div className="resize-guidelines">

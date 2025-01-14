@@ -1,18 +1,22 @@
-import { useState } from "react";
-import TshirtCanvas from "./components/TshirtCanvas";
+import { BrowserRouter, Routes, Route } from "react-router-dom";
+import Header from "./components/Header";
+import Home from "./pages/Home";
+import Login from "./components/auth/Login";
+import Register from "./components/auth/Register";
+import Designs from "./pages/Designs";
 
 export default function App() {
-  const [designImage, setDesignImage] = useState<string | null>(null);
-
   return (
-    <div className="min-h-screen bg-gray-100 p-8">
-      <h1 className="text-3xl font-bold text-center mb-8">T-Shirt Designer</h1>
-      <div className="max-w-2xl mx-auto">
-        <TshirtCanvas
-          designImage={designImage}
-          setDesignImage={setDesignImage}
-        />
+    <BrowserRouter>
+      <div className="min-h-screen bg-gray-100">
+        <Header />
+        <Routes>
+          <Route path="/" element={<Home />} />
+          <Route path="/designs" element={<Designs />} />
+          <Route path="/login" element={<Login />} />
+          <Route path="/register" element={<Register />} />
+        </Routes>
       </div>
-    </div>
+    </BrowserRouter>
   );
 }

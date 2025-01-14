@@ -1,1 +1,0 @@
-// This file can be removed as ItemTypes is no longer used after removing react-dnd 

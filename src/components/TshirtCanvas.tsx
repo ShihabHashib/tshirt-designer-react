@@ -6,12 +6,16 @@ import { ResizeCallbackData } from "react-resizable";
 import DesignUploader from "./t-shirt/DesignUploader.tsx";
 import DraggableDesign from "./t-shirt/DraggableDesign.tsx";
 import DesignManagement from "./t-shirt/DesignManagement.tsx";
+import { cloudinaryService } from "../services/cloudinary";
+import { auth } from "../config/firebase";
+import { designService } from "../services/designs";
+import { collection, query, where, getDocs } from "firebase/firestore";
+import { db } from "../config/firebase";
+import { useErrorHandler } from "../hooks/useErrorHandler";
+import ErrorMessage from "./ErrorMessage";
 
 interface TshirtCanvasProps {
-  frontImage?: string;
-  backImage?: string;
-  leftSleeveImage?: string;
-  rightSleeveImage?: string;
+  designImage?: string;
   setDesignImage: (image: string | null) => void;
 }
 
@@ -59,39 +63,45 @@ const saveColor = (color: string) => {
 };
 
 export default function TshirtCanvas({
-  frontImage,
-  backImage,
-  leftSleeveImage,
-  rightSleeveImage,
+  designImage,
   setDesignImage,
 }: TshirtCanvasProps) {
+  const { error, handleError, clearError } = useErrorHandler();
   const [tshirtColor, setTshirtColor] = useState(getSavedColor());
-
-  // Update the INITIAL_POSITION and INITIAL_SIZE to handle sleeve views
-  const getInitialPosition = (viewType: string): Position => {
-    if (viewType.includes("Sleeve")) {
-      return { x: 1000, y: 957 }; // Increased y position for better visibility
-    }
-    return { x: 107, y: 38 }; // Original position for front/back
-  };
-
-  const getInitialSize = (viewType: string): Size => {
-    if (viewType.includes("Sleeve")) {
-      return { width: 500, height: 500 }; // Increased size for sleeves
-    }
-    return { width: 150, height: 150 }; // Original size for front/back
-  };
-
-  const [position, setPosition] = useState<Position>(
-    getInitialPosition("front")
-  );
-  const [size, setSize] = useState<Size>(getInitialSize("front"));
-  const [isFirstUpload, setIsFirstUpload] = useState(true);
-
-  // Add new view type
   const [viewType, setViewType] = useState<
     "front" | "back" | "leftSleeve" | "rightSleeve"
   >("front");
+
+  // Keep track of positions and sizes for each view separately
+  const [positions, setPositions] = useState<Record<string, Position>>({
+    front: { x: 107, y: 38 },
+    back: { x: 107, y: 38 },
+    leftSleeve: { x: 1000, y: 957 },
+    rightSleeve: { x: 1000, y: 957 },
+  });
+
+  const [sizes, setSizes] = useState<Record<string, Size>>({
+    front: { width: 150, height: 150 },
+    back: { width: 150, height: 150 },
+    leftSleeve: { width: 500, height: 500 },
+    rightSleeve: { width: 500, height: 500 },
+  });
+
+  const handleDrag = (_e: DraggableEvent, data: { x: number; y: number }) => {
+    setPositions((prev) => ({
+      ...prev,
+      [viewType]: { x: data.x, y: data.y },
+    }));
+  };
+
+  const handleResize = (_e: React.SyntheticEvent, data: ResizeCallbackData) => {
+    setSizes((prev) => ({
+      ...prev,
+      [viewType]: { width: data.size.width, height: data.size.height },
+    }));
+  };
+
+  const [isFirstUpload, setIsFirstUpload] = useState(true);
 
   // Replace uploadedDesign with designsByView
   const [designsByView, setDesignsByView] = useState<{
@@ -129,37 +139,106 @@ export default function TshirtCanvas({
     { name: "Pink", value: "#ffc0cb" },
   ];
 
-  const handleDrag = (_e: DraggableEvent, data: { x: number; y: number }) => {
-    setPosition({ x: data.x, y: data.y });
-  };
+  const handleFileSelect = async (file: File) => {
+    try {
+      // 1. Compress and store locally first
+      const compressedFile = await compressImage(file);
+      const localUrl = URL.createObjectURL(compressedFile);
 
-  const handleResize = (_e: React.SyntheticEvent, data: ResizeCallbackData) => {
-    setSize({ width: data.size.width, height: data.size.height });
-  };
+      // Store the file for later upload
+      setDesignFiles((prev) => ({
+        ...prev,
+        [viewType]: compressedFile,
+      }));
 
-  const handleFileSelect = (file: File) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const result = e.target?.result as string;
-      const initialPos = getInitialPosition(viewType);
-      const initialSize = getInitialSize(viewType);
+      const initialPos = positions[viewType];
+      const initialSize = sizes[viewType];
 
       setDesignsByView((prev) => ({
         ...prev,
         [viewType]: {
-          image: result,
-          position: isFirstUpload ? initialPos : position,
+          image: localUrl,
+          position: isFirstUpload ? initialPos : positions[viewType],
           size: initialSize,
         },
       }));
-      setDesignImage(result);
+
+      setDesignImage(localUrl);
+
       if (isFirstUpload) {
-        setPosition(initialPos);
-        setSize(initialSize);
+        setPositions((prev) => ({
+          ...prev,
+          [viewType]: initialPos,
+        }));
+        setSizes((prev) => ({
+          ...prev,
+          [viewType]: initialSize,
+        }));
         setIsFirstUpload(false);
       }
-    };
-    reader.readAsDataURL(file);
+    } catch (err) {
+      handleError(err, "Failed to process image");
+    }
+  };
+
+  // Add image compression utility
+  const compressImage = (file: File): Promise<File> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = new Image();
+        img.src = e.target?.result as string;
+
+        img.onload = () => {
+          const canvas = document.createElement("canvas");
+          const ctx = canvas.getContext("2d");
+
+          // Max dimensions
+          const MAX_WIDTH = 800;
+          const MAX_HEIGHT = 800;
+
+          let width = img.width;
+          let height = img.height;
+
+          // Calculate new dimensions
+          if (width > height) {
+            if (width > MAX_WIDTH) {
+              height *= MAX_WIDTH / width;
+              width = MAX_WIDTH;
+            }
+          } else {
+            if (height > MAX_HEIGHT) {
+              width *= MAX_HEIGHT / height;
+              height = MAX_HEIGHT;
+            }
+          }
+
+          canvas.width = width;
+          canvas.height = height;
+
+          ctx?.drawImage(img, 0, 0, width, height);
+
+          // Convert to file
+          canvas.toBlob(
+            (blob) => {
+              if (blob) {
+                const compressedFile = new File([blob], file.name, {
+                  type: "image/jpeg",
+                  lastModified: Date.now(),
+                });
+                resolve(compressedFile);
+              } else {
+                reject(new Error("Failed to compress image"));
+              }
+            },
+            "image/jpeg",
+            0.8 // Quality (0.8 = 80%)
+          );
+        };
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
   };
 
   const handleColorChange = (color: string) => {
@@ -177,46 +256,167 @@ export default function TshirtCanvas({
     setIsFirstUpload(true);
   };
 
-  // Update position and size when switching views
+  // First useEffect - Position and size updates when switching views
   useEffect(() => {
     const currentDesign = designsByView[viewType];
-    if (currentDesign) {
-      setPosition(currentDesign.position);
-      setSize(currentDesign.size);
-    } else {
-      setPosition(getInitialPosition(viewType));
-      setSize(getInitialSize(viewType));
+    if (currentDesign && currentDesign.position && currentDesign.size) {
+      // Only update if the values are actually different
+      if (
+        positions[viewType].x !== currentDesign.position.x ||
+        positions[viewType].y !== currentDesign.position.y ||
+        sizes[viewType].width !== currentDesign.size.width ||
+        sizes[viewType].height !== currentDesign.size.height
+      ) {
+        setPositions((prev) => ({
+          ...prev,
+          [viewType]: currentDesign.position,
+        }));
+        setSizes((prev) => ({
+          ...prev,
+          [viewType]: currentDesign.size,
+        }));
+      }
     }
-  }, [viewType, designsByView]);
+  }, [viewType]); // Only depend on viewType changes
 
-  // Update position and size storage when they change
+  // Add before the useEffect
+  const currentPosition = positions[viewType];
+  const currentSize = sizes[viewType];
+
+  // Second useEffect - Update designsByView when position or size changes
   useEffect(() => {
-    if (designsByView[viewType]) {
-      setDesignsByView((prev) => ({
-        ...prev,
-        [viewType]: {
-          ...prev[viewType]!,
-          position,
-          size,
-        },
-      }));
+    if (designsByView[viewType]?.image) {
+      const currentDesign = designsByView[viewType];
+
+      if (
+        currentDesign &&
+        (currentDesign.position.x !== currentPosition.x ||
+          currentDesign.position.y !== currentPosition.y ||
+          currentDesign.size.width !== currentSize.width ||
+          currentDesign.size.height !== currentSize.height)
+      ) {
+        setDesignsByView((prev) => ({
+          ...prev,
+          [viewType]: {
+            ...prev[viewType]!,
+            position: currentPosition,
+            size: currentSize,
+          },
+        }));
+      }
     }
-  }, [position, size, viewType, designsByView]);
+  }, [viewType, currentPosition, currentSize]);
 
   // Update the designImage calculation
-  const designImage = designsByView[viewType]?.image || null;
+  const currentDesignImage = designsByView[viewType]?.image || null;
+
+  // Add new state for loading
+  const [isSaving, setIsSaving] = useState(false);
+
+  // Helper to generate a design hash
+  const generateDesignHash = (designData: SavedDesign): string => {
+    // Create a string of all image URLs and positions
+    const designString = Object.entries(designData.designs)
+      .map(([view, design]) => {
+        if (!design) return "";
+        return `${view}:${design.image}:${design.position.x}:${design.position.y}:${design.size.width}:${design.size.height}`;
+      })
+      .join("|");
+
+    return `${designData.tshirtColor}|${designString}`;
+  };
 
   // Update saveDesign function
-  const saveDesign = () => {
+  const saveDesign = async () => {
+    if (isSaving) return;
+
     try {
+      setIsSaving(true);
+
+      // 1. Create design data first
       const designData: SavedDesign = {
         tshirtColor,
         designs: designsByView,
       };
-      localStorage.setItem("savedDesign", JSON.stringify(designData));
-    } catch (error) {
-      console.warn("Could not save design:", error);
+
+      // 2. Generate hash for the current design
+      const designHash = generateDesignHash(designData);
+
+      // 3. Check if a similar design exists
+      const user = auth.currentUser;
+      if (user) {
+        const designsRef = collection(db, "designs");
+        const q = query(
+          designsRef,
+          where("userId", "==", user.uid),
+          where("designHash", "==", designHash)
+        );
+
+        const querySnapshot = await getDocs(q);
+        if (!querySnapshot.empty) {
+          if (!confirm("A similar design already exists. Save anyway?")) {
+            return;
+          }
+        }
+
+        // 4. Upload images to Cloudinary
+        const uploadedFiles = new Map<string, string>();
+        const uploadPromises = Object.entries(designFiles).map(
+          async ([view, file]) => {
+            if (!file) return [view, null];
+
+            // Check if this exact file was already uploaded
+            const fileHash = await hashFile(file);
+            if (uploadedFiles.has(fileHash)) {
+              return [view, uploadedFiles.get(fileHash)];
+            }
+
+            const imageUrl = await cloudinaryService.uploadDesignImage(file);
+            uploadedFiles.set(fileHash, imageUrl);
+            return [view, imageUrl];
+          }
+        );
+
+        const uploadedUrls = Object.fromEntries(
+          await Promise.all(uploadPromises)
+        );
+
+        // 5. Update design data with Cloudinary URLs
+        const finalDesignData = {
+          ...designData,
+          designs: Object.entries(designData.designs).reduce(
+            (acc, [view, design]) => ({
+              ...acc,
+              [view]: design
+                ? {
+                    ...design,
+                    image: uploadedUrls[view] || design.image,
+                  }
+                : null,
+            }),
+            {} as SavedDesign["designs"]
+          ),
+        };
+
+        // 6. Save to Firebase with hash
+        await designService.saveDesign(user.uid, finalDesignData, designHash);
+
+        // 7. Save to localStorage as backup
+        localStorage.setItem("savedDesign", JSON.stringify(finalDesignData));
+      }
+    } catch (err) {
+      handleError(err, "Failed to save design");
+    } finally {
+      setIsSaving(false);
     }
+  };
+
+  // Helper function to generate hash for file
+  const hashFile = async (file: File): Promise<string> => {
+    const buffer = await file.arrayBuffer();
+    const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
   };
 
   // Update loadSavedDesign function
@@ -230,8 +430,14 @@ export default function TshirtCanvas({
 
         const currentDesign = design.designs[viewType];
         if (currentDesign) {
-          setPosition(currentDesign.position);
-          setSize(currentDesign.size);
+          setPositions((prev) => ({
+            ...prev,
+            [viewType]: currentDesign.position,
+          }));
+          setSizes((prev) => ({
+            ...prev,
+            [viewType]: currentDesign.size,
+          }));
         }
       }
     } catch (error) {
@@ -239,8 +445,32 @@ export default function TshirtCanvas({
     }
   };
 
+  // Add at the top with other state declarations
+  const [designFiles, setDesignFiles] = useState<Record<string, File>>({});
+
+  // Add cleanup useEffect
+  useEffect(() => {
+    return () => {
+      // Cleanup local URLs when component unmounts
+      Object.values(designsByView).forEach((design) => {
+        if (design?.image?.startsWith("blob:")) {
+          URL.revokeObjectURL(design.image);
+        }
+      });
+    };
+  }, []);
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-100 p-4">
+      {error && (
+        <div className="fixed top-4 right-4 z-50">
+          <ErrorMessage
+            message={error.message}
+            type={error.type}
+            onClose={clearError}
+          />
+        </div>
+      )}
       <div className="container mx-auto flex flex-col lg:flex-row justify-center items-center gap-8 lg:gap-20">
         {/* Control Panel */}
         <div className="w-full lg:w-[320px] space-y-6 min-w-[320px]">
@@ -253,10 +483,14 @@ export default function TshirtCanvas({
           <DesignUploader
             onFileSelect={handleFileSelect}
             onRemoveDesign={handleRemoveDesign}
-            hasDesign={!!designImage}
+            hasDesign={!!currentDesignImage}
           />
 
-          <DesignManagement onSave={saveDesign} onLoad={loadSavedDesign} />
+          <DesignManagement
+            onSave={saveDesign}
+            onLoad={loadSavedDesign}
+            isSaving={isSaving}
+          />
         </div>
 
         {/* T-shirt Canvas */}
@@ -435,7 +669,7 @@ export default function TshirtCanvas({
                 />
               )}
 
-              {designImage && (
+              {currentDesignImage && (
                 <foreignObject
                   width="100%"
                   height="100%"
@@ -443,12 +677,12 @@ export default function TshirtCanvas({
                 >
                   <div className="w-full h-full relative">
                     <DraggableDesign
-                      designImage={designImage}
-                      position={position}
-                      size={size}
+                      designImage={currentDesignImage}
+                      position={positions[viewType]}
+                      size={sizes[viewType]}
                       onDrag={handleDrag}
                       onResize={handleResize}
-                      initialPosition={getInitialPosition(viewType)}
+                      initialPosition={positions[viewType]}
                       bounds={
                         viewType.includes("Sleeve")
                           ? { left: 500, top: 400, right: 1500, bottom: 1500 }

@@ -1,29 +1,32 @@
 interface DesignManagementProps {
-  onSave: () => void;
+  onSave: () => Promise<void>;
   onLoad: () => void;
+  isSaving?: boolean;
 }
 
 export default function DesignManagement({
   onSave,
   onLoad,
+  isSaving = false,
 }: DesignManagementProps) {
   return (
-    <div className="bg-white rounded-lg shadow p-6">
-      <h3 className="font-medium text-lg mb-4">Design Management</h3>
-      <div className="space-y-2">
-        <button
-          onClick={onSave}
-          className="w-full px-4 py-3 text-sm text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
-        >
-          Save Design
-        </button>
-        <button
-          onClick={onLoad}
-          className="w-full px-4 py-3 text-sm text-blue-600 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 transition-colors"
-        >
-          Load Saved Design
-        </button>
-      </div>
+    <div className="flex gap-2">
+      <button
+        onClick={onSave}
+        disabled={isSaving}
+        className={`px-4 py-2 rounded bg-blue-500 text-white ${
+          isSaving ? "opacity-50 cursor-not-allowed" : "hover:bg-blue-600"
+        }`}
+      >
+        {isSaving ? "Saving..." : "Save Design"}
+      </button>
+      <button
+        onClick={onLoad}
+        disabled={isSaving}
+        className="px-4 py-2 rounded bg-gray-500 text-white hover:bg-gray-600"
+      >
+        Load Design
+      </button>
     </div>
   );
 }
